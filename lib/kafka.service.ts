@@ -5,14 +5,12 @@ import {
 	Producer,
 	RecordMetadata,
 	Admin,
-	SeekEntry,
 	TopicPartitionOffsetAndMetadata,
-	Offsets,
 	EachMessagePayload,
 	logLevel,
 	LogEntry,
 } from 'kafkajs';
-import { KafkaModuleOption, KafkaMessageSend, KafkaTransaction, IHeaders } from './interfaces';
+import { KafkaModuleOption, KafkaMessageSend, IHeaders } from './interfaces';
 
 import { SUBSCRIBER_MAP, SUBSCRIBER_OBJECT_MAP } from './kafka.decorator';
 import { randomUUID } from 'crypto';
@@ -32,40 +30,37 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 	private responseEvents: EventEmitter;
 
 	constructor(options: KafkaModuleOption) {
-		const { client, consumer: consumerConfig, producer: producerConfig, autoConnect } = options.clientConfig;
+		const { client, consumer, producer, autoConnect } = options.clientConfig;
 		this.options = options;
 		this.logger = options.logger ? options.logger : new Logger(options.name);
 
 		this.kafka = new Kafka({
 			...client,
-			logCreator: (level: logLevel) => {
-				return (logInfo: LogEntry) => {
-					switch (level) {
-						case logLevel.DEBUG:
-							this.logger.debug(logInfo.log);
-							break;
-						case logLevel.INFO:
-							this.logger.log(logInfo.log);
-							break;
-						case logLevel.WARN:
-							this.logger.warn(logInfo.log);
-							break;
-						case logLevel.ERROR:
-							this.logger.error(logInfo.log);
-							break;
-						case logLevel.NOTHING:
-						default:
-							break;
-					}
-				};
+			logCreator: (level: logLevel) => (logInfo: LogEntry) => {
+				switch (level) {
+					case logLevel.DEBUG:
+						this.logger.debug(logInfo.log.message, logInfo.log);
+						break;
+					case logLevel.INFO:
+						this.logger.log(logInfo.log.message, logInfo.log);
+						break;
+					case logLevel.WARN:
+						this.logger.warn(logInfo.log.message, logInfo.log);
+						break;
+					case logLevel.ERROR:
+						this.logger.error(logInfo.log.message, logInfo.log);
+						break;
+					case logLevel.NOTHING:
+					default:
+						break;
+				}
 			},
 		});
 
-		const { groupId } = consumerConfig;
-		const consumerOptions = Object.assign({ groupId: `${groupId}-client` }, consumerConfig);
+		const consumerOptions = Object.assign({ groupId: `${consumer.groupId}-client` }, consumer);
 		this.autoConnect = autoConnect ?? true;
 		this.consumer = this.kafka.consumer(consumerOptions);
-		this.producer = this.kafka.producer(producerConfig);
+		this.producer = this.kafka.producer(producer);
 		this.admin = this.kafka.admin();
 	}
 
@@ -76,6 +71,10 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 			await this.subscribe(topic);
 		});
 		this.bindAllTopicToConsumer();
+	}
+
+	public subscribeToResponseOf<T>(topic: string, instance: T): void {
+		SUBSCRIBER_OBJECT_MAP.set(topic, instance);
 	}
 
 	private initReply() {
@@ -119,7 +118,7 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 			this.logger.error('There is no producer, unable to send message.');
 			return;
 		}
-		this.logger.debug('Send message: ' + message);
+		this.logger.debug('Send message: ' + JSON.stringify(message));
 		return this.producer.send({ topic: message.topic, messages: message.messages });
 	}
 
@@ -131,7 +130,7 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 			}
 			const headers: IHeaders = { correlationId: randomUUID(), requestTopic: this.responseTopic };
 			this.responseEvents.once(headers.correlationId, (response) => {
-				this.logger.debug('Reply message: ' + response);
+				this.logger.debug('Reply message: ' + JSON.stringify(response));
 				resolve(response);
 			});
 			await this.send({
@@ -158,11 +157,14 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 			return;
 		}
 		const callback = SUBSCRIBER_MAP.get(payload.topic);
-		const result = await callback(JSON.stringify(message.value));
+		const objectRef = SUBSCRIBER_OBJECT_MAP.get(payload.topic);
+		const result = await callback.apply(objectRef, message);
 		if (headers.requestTopic && headers.correlationId) {
+			const correlationId = headers.correlationId.toString();
+			const requestTopic = headers.requestTopic.toString();
 			this.send({
-				topic: headers.requestTopic,
-				messages: [{ value: JSON.stringify(result), headers }],
+				topic: requestTopic,
+				messages: [{ value: JSON.stringify(result), headers: { correlationId }, partition: payload.partition }],
 			});
 		}
 	}

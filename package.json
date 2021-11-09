@@ -1,6 +1,6 @@
 {
   "name": "@petrovdv/nestjs-kafka-client",
-  "version": "0.0.8",
+  "version": "0.0.18",
   "description": "Kafka integration with NestJS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
