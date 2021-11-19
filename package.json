@@ -1,6 +1,6 @@
 {
   "name": "@petrovdv/nestjs-kafka-client",
-  "version": "0.0.18",
+  "version": "0.0.23",
   "description": "Kafka integration with NestJS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -28,6 +28,9 @@
     "reflect-metadata": "^0.1.13"
   },
   "devDependencies": {
+    "colorette": "^2.0.16",
+    "@nestjs/config": "^1.1.0",
+    "nestjs-pino": "^2.3.0",
     "@nestjs/testing": "^8.1.2",
     "@nestjs/common": "^8.1.2",
     "@nestjs/core": "^8.1.2",

@@ -10,12 +10,13 @@ import {
 } from 'kafkajs';
 import { LoggerService, ModuleMetadata, Type } from '@nestjs/common';
 
-export interface IHeaders extends Partial<KafkaHeaders>, Record<string, string> {}
+export interface IHeaders extends Partial<KafkaHeaders>, Record<string, any> {}
 
 export interface KafkaHeaders {
 	correlationId: string;
 	requestTopic: string;
-	partision: string;
+	responsePartitions: string;
+	error: string;
 }
 
 export interface KafkaResponse<T = any> {

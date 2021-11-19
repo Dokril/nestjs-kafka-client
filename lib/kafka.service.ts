@@ -9,6 +9,7 @@ import {
 	EachMessagePayload,
 	logLevel,
 	LogEntry,
+	AssignerProtocol,
 } from 'kafkajs';
 import { KafkaModuleOption, KafkaMessageSend, IHeaders } from './interfaces';
 
@@ -28,6 +29,8 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 	private logger: LoggerService;
 	private responseTopic: string;
 	private responseEvents: EventEmitter;
+
+	private partitions: number[];
 
 	constructor(options: KafkaModuleOption) {
 		const { client, consumer, producer, autoConnect } = options.clientConfig;
@@ -56,7 +59,6 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 				}
 			},
 		});
-
 		const consumerOptions = Object.assign({ groupId: `${consumer.groupId}-client` }, consumer);
 		this.autoConnect = autoConnect ?? true;
 		this.consumer = this.kafka.consumer(consumerOptions);
@@ -81,6 +83,10 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 		if (this.options.replayMode) {
 			this.responseTopic = this.options.name.toLowerCase() + '_response';
 			this.responseEvents = new EventEmitter();
+			this.consumer.on('consumer.group_join', (clientinfo) => {
+				this.partitions = clientinfo.payload.memberAssignment[this.responseTopic];
+				this.logger.debug('Set new partitions ' + this.partitions);
+			});
 			SUBSCRIBER_MAP.set(this.responseTopic, null);
 		}
 	}
@@ -128,7 +134,11 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 				this.logger.error('There is no producer, unable to send message.');
 				reject('There is no producer, unable to send message.');
 			}
-			const headers: IHeaders = { correlationId: randomUUID(), requestTopic: this.responseTopic };
+			const headers: IHeaders = {
+				correlationId: randomUUID(),
+				requestTopic: this.responseTopic,
+				responsePartitions: JSON.stringify(this.partitions),
+			};
 			this.responseEvents.once(headers.correlationId, (response) => {
 				this.logger.debug('Reply message: ' + JSON.stringify(response));
 				resolve(response);
@@ -156,16 +166,36 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
 			this.responseEvents.emit(headers.correlationId, message);
 			return;
 		}
+		const correlationId = headers.correlationId.toString();
+		const requestTopic = headers.requestTopic.toString();
+		const responsePartitions = JSON.parse(headers.responsePartitions.toString()) as number[];
 		const callback = SUBSCRIBER_MAP.get(payload.topic);
 		const objectRef = SUBSCRIBER_OBJECT_MAP.get(payload.topic);
-		const result = await callback.apply(objectRef, message);
-		if (headers.requestTopic && headers.correlationId) {
-			const correlationId = headers.correlationId.toString();
-			const requestTopic = headers.requestTopic.toString();
-			this.send({
-				topic: requestTopic,
-				messages: [{ value: JSON.stringify(result), headers: { correlationId }, partition: payload.partition }],
-			});
+		try {
+			const result = await callback.apply(objectRef, [message]);
+			if (headers.requestTopic && headers.correlationId && headers.responsePartitions) {
+				for (const partition of responsePartitions) {
+					this.send({
+						topic: requestTopic,
+						messages: [{ value: JSON.stringify(result), headers: { correlationId }, partition }],
+					});
+				}
+			}
+		} catch (error) {
+			if (headers.requestTopic && headers.correlationId && headers.responsePartitions) {
+				for (const partition of responsePartitions) {
+					this.send({
+						topic: requestTopic,
+						messages: [
+							{
+								value: JSON.stringify(error.message),
+								headers: { correlationId, error: true },
+								partition,
+							},
+						],
+					});
+				}
+			}
 		}
 	}
 }
